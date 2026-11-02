@@ -1,0 +1,43 @@
+#version 450
+layout(local_size_x=16,local_size_y=16) in;
+layout(set = 0, binding = 0) uniform Camera {
+  mat4 vp;
+  vec4 eye;
+  vec4 light;
+  vec4 settings;
+  mat4 inverseVP;
+  vec4 points;
+  mat4 shadowVP[4];
+  mat4 view;
+  vec4 splits;
+  vec4 texels;
+  vec4 shadow; // enabled, PCF radius, constant bias, normal bias in texels
+  vec4 sun;
+}
+camera;
+struct PointLight {vec4 positionRadius;vec4 intensity;};
+layout(std430,set=0,binding=8) readonly buffer Lights {uvec4 cfg;PointLight lights[];};
+layout(std430,set=0,binding=9) buffer Lists {uint data[];};
+layout(set=1,binding=3) uniform sampler2D depthTex;
+shared uint lo,hi,valid,count;
+shared uint indices[256];
+void main() {
+ uint lane=gl_LocalInvocationIndex, size=cfg.y;
+ if(lane==0) {lo=floatBitsToUint(1.0);hi=0;valid=0;count=0;} barrier();
+ ivec2 extent=textureSize(depthTex,0), origin=ivec2(gl_WorkGroupID.xy*size);
+ for(uint k=lane;k<size*size;k+=256) {
+  ivec2 p=origin+ivec2(k%size,k/size);
+  if(all(lessThan(p,extent))) {float z=texelFetch(depthTex,p,0).r;if(z>0) {atomicMin(lo,floatBitsToUint(z));atomicMax(hi,floatBitsToUint(z));atomicAdd(valid,1);}}
+ } barrier();
+ mat4 t=transpose(camera.vp);
+ vec2 low=vec2(origin)/vec2(extent)*2-1, high=vec2(min(origin+ivec2(size),extent))/vec2(extent)*2-1;
+ vec4 planes[6]=vec4[6](t[0]-low.x*t[3],high.x*t[3]-t[0],t[1]-low.y*t[3],high.y*t[3]-t[1],t[2]-uintBitsToFloat(lo)*t[3],uintBitsToFloat(hi)*t[3]-t[2]);
+ if(valid>0) for(uint i=lane;i<cfg.x;i+=256) {
+  vec4 sphere=lights[i].positionRadius;bool hit=true;
+  for(int j=0;j<6;++j) if(dot(planes[j],vec4(sphere.xyz,1)) < -sphere.w*length(planes[j].xyz)-.0001) hit=false;
+  if(hit) {uint slot=atomicAdd(count,1);if(slot<cfg.z) indices[slot]=i;}
+ } barrier();
+ uint columns=(uint(extent.x)+size-1)/size, o=(gl_WorkGroupID.y*columns+gl_WorkGroupID.x)*258;
+ if(lane==0) {data[o]=count;data[o+1]=uint(count>cfg.z);}
+ for(uint i=lane;i<min(count,cfg.z);i+=256) data[o+2+i]=indices[i];
+}

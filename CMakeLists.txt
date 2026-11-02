@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.24)
+project(ToyRenderer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+ add_compile_options(/utf-8 /EHsc)
+endif()
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/glfw)
+find_package(Vulkan REQUIRED)
+find_program(GLSLC glslc HINTS "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+set(IMGUI external/imgui)
+add_library(renderer_core STATIC src/scene.cpp src/renderer.cpp src/vk/vk_device.cpp
+ ${IMGUI}/imgui.cpp ${IMGUI}/imgui_draw.cpp ${IMGUI}/imgui_tables.cpp ${IMGUI}/imgui_widgets.cpp
+ ${IMGUI}/backends/imgui_impl_glfw.cpp ${IMGUI}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(renderer_core PUBLIC src external ${IMGUI} ${IMGUI}/backends)
+target_compile_definitions(renderer_core PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE GLM_FORCE_RADIANS)
+target_link_libraries(renderer_core PUBLIC glfw Vulkan::Vulkan)
+foreach(S tiled.comp motion.vert motion.frag taa.frag ssao.frag ao_filter.frag ao_upsample.frag shadow.frag shadow.vert cube.vert cube.frag gbuffer.frag deferred.frag tonemap.vert tonemap.frag)
+ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/shaders/${S}.spv
+ COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
+ COMMAND ${GLSLC} ${CMAKE_CURRENT_SOURCE_DIR}/shaders/${S} -o ${CMAKE_CURRENT_BINARY_DIR}/shaders/${S}.spv
+ DEPENDS shaders/point_lights.glsl shaders/temporal_camera.glsl shaders/ao_common.glsl shaders/${S} shaders/brdf.glsl shaders/material.glsl shaders/lighting.glsl shaders/shadows.glsl)
+ list(APPEND SPV ${CMAKE_CURRENT_BINARY_DIR}/shaders/${S}.spv)
+endforeach()
+add_custom_target(renderer_shaders DEPENDS ${SPV})
+target_compile_definitions(renderer_core PRIVATE ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/" SHADER_DIR="${CMAKE_CURRENT_BINARY_DIR}/shaders/")
+add_dependencies(renderer_core renderer_shaders)
+add_executable(ToyRenderer src/main.cpp)
+target_link_libraries(ToyRenderer PRIVATE renderer_core)

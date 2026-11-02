@@ -1,0 +1,4 @@
+build*/
+*.user
+imgui.ini
+docs/
